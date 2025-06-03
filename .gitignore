@@ -1,2 +1,5 @@
 .env
 .idea
+*.session
+messaged_users.db
+sent_messages_log.txt
