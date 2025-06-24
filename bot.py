@@ -67,12 +67,14 @@ def get_remaining_cooldown_minutes():
     # remaining_seconds = (COOLDOWN_MINUTES * 60) - time_diff.total_seconds()
     # return max(0, int(remaining_seconds / 60))
 
+
 bot = create_bot({
     "OPENAI_API_KEY": openai.api_key,
     "DATABASE_URL": os.getenv("DATABASE_URL", "sqlite:///./database.db"),
     "BOT_ID": os.getenv("BOT_ID", "unknown"),
     "MODEL_NAME": os.getenv("FINE_TUNED_MODEL", "gpt-4.1")
 })
+
 
 @client.on(events.NewMessage())
 async def on_new_message(event):
