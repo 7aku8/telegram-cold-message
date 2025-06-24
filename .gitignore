@@ -3,3 +3,5 @@
 *.session
 messaged_users.db
 sent_messages_log.txt
+
+__pycache__
