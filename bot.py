@@ -5,10 +5,9 @@ import random
 from telethon import TelegramClient, events
 import openai
 import datetime
-import sqlite3
-import atexit
 from dotenv import load_dotenv
 
+from conversation import create_bot
 from database import get_lead, create_lead, create_message
 from ai_utils import is_lead_relevant, generate_first_message
 from webhook import send_webhook
@@ -68,6 +67,12 @@ def get_remaining_cooldown_minutes():
     # remaining_seconds = (COOLDOWN_MINUTES * 60) - time_diff.total_seconds()
     # return max(0, int(remaining_seconds / 60))
 
+bot = create_bot({
+    "OPENAI_API_KEY": openai.api_key,
+    "DATABASE_URL": os.getenv("DATABASE_URL", "sqlite:///./database.db"),
+    "BOT_ID": os.getenv("BOT_ID", "unknown"),
+    "MODEL_NAME": os.getenv("FINE_TUNED_MODEL", "gpt-4.1")
+})
 
 @client.on(events.NewMessage())
 async def on_new_message(event):
@@ -75,9 +80,19 @@ async def on_new_message(event):
 
     is_lead = get_lead(chat_id)
 
-    if is_lead:
-        print(f"Lead already exists for chat ID {chat_id}, skipping...")
+    if not is_lead:
+        print(f"New chat started with {chat_id}, but no lead found. Skipping...")
         return
+
+    response = await bot.process_message(
+        telegram_chat_id=chat_id,
+        user_message=event.message.message,
+        user_name=event.sender.first_name,
+        username=event.sender.username
+    )
+
+    print(f"Processed message for chat {chat_id}: {response}")
+    await client.send_message(chat_id, response)
 
 
 # === MAIN EVENT HANDLER ===
