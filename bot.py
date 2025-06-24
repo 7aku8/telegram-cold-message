@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 from conversation import create_bot
 from database import get_lead, create_lead, create_message
 from ai_utils import is_lead_relevant, generate_first_message
+from message_debouncer import MessageDebouncer
 from webhook import send_webhook
 
 load_dotenv()
@@ -18,16 +19,11 @@ load_dotenv()
 api_id = int(os.getenv("API_ID", 1))
 api_hash = os.getenv("API_HASH", "your_api_hash_here")
 session_name = 'filip_session'
-# chat_ids = [
-#     1626522644,  # Gubbin's lounge
-#     1652712042,  # Suits Calls | USA
-#     1710145932,  # Nanocaps - BSC
-#     1790816396,  # SHILLGROW 🚀| HardShill Lounge on BSC
-#     1505362437,  # Prods Shills
-# ]
+
 chat_ids = [
--4876574630,  # P100 - Crypto Business Accounts
+    -4876574630,  # P100 - Crypto Business Accounts
 ]
+
 openai.api_key = os.getenv("OPENAI_API_KEY", "your_openai_api_key_here")
 webhook_url = os.getenv("WEBHOOK_URL", "https://your-n8n-webhook-url.com/webhook")
 
@@ -37,35 +33,24 @@ IBANs, wallets, and Mastercards, all accessible via API.
 Let me know if that sounds relevant, happy to share more details.
 '''
 
-log_file = 'sent_messages_log.txt'
-
 client = TelegramClient(session_name, api_id, api_hash)
 
 # === RATE LIMITING ===
 COOLDOWN_MINUTES = 15
 
+# === DEBOUNCING ===
+DEBOUNCE_SECONDS = 5.0  # Wait 3 seconds after last message before responding
+message_debouncer = MessageDebouncer(debounce_seconds=DEBOUNCE_SECONDS)
+
 
 def can_process_messages():
     """Check if enough time has passed since last message to process new ones"""
     return True
-    # last_time = get_last_message_time()
-    # if last_time is None:
-    #     return True
-    #
-    # time_diff = datetime.datetime.now() - last_time
-    # return time_diff.total_seconds() >= (COOLDOWN_MINUTES * 60)
 
 
 def get_remaining_cooldown_minutes():
     """Get remaining minutes in cooldown period"""
     return 0
-    # last_time = get_last_message_time()
-    # if last_time is None:
-    #     return 0
-    #
-    # time_diff = datetime.datetime.now() - last_time
-    # remaining_seconds = (COOLDOWN_MINUTES * 60) - time_diff.total_seconds()
-    # return max(0, int(remaining_seconds / 60))
 
 
 bot = create_bot({
@@ -75,31 +60,40 @@ bot = create_bot({
     "MODEL_NAME": os.getenv("FINE_TUNED_MODEL", "gpt-4.1")
 })
 
+# Set bot and client references for debouncer
+message_debouncer.set_bot_and_client(bot, client)
+
 
 @client.on(events.NewMessage())
 async def on_new_message(event):
-    chat_id = event.chat_id
+    """Handle incoming messages from existing leads with debouncing"""
+    chat_id = str(event.chat_id)
 
-    is_lead = get_lead(chat_id)
+    is_lead = get_lead(int(chat_id))
 
     if not is_lead:
         print(f"New chat started with {chat_id}, but no lead found. Skipping...")
         return
 
-    response = await bot.process_message(
-        telegram_chat_id=chat_id,
-        user_message=event.message.message,
-        user_name=event.sender.first_name,
-        username=event.sender.username
-    )
+    sender = await event.get_sender()
+    sender_name = sender.first_name or "there"
+    username = sender.username if sender.username else "no_username"
 
-    print(f"Processed message for chat {chat_id}: {response}")
-    await client.send_message(chat_id, response)
+    print(f"📨 Received message from {sender_name} (chat: {chat_id})")
+
+    # Add message to debouncer instead of processing immediately
+    await message_debouncer.add_message(
+        chat_id=chat_id,
+        message=event.message.message,
+        sender_name=sender_name,
+        username=username
+    )
 
 
 # === MAIN EVENT HANDLER ===
 @client.on(events.NewMessage(chat_ids))
 async def handler(event):
+    """Handle new messages from monitored groups"""
     sender = await event.get_sender()
     sender_name = sender.first_name or "there"
     sender_id = sender.id
@@ -133,18 +127,11 @@ async def handler(event):
 
             await client.send_message(sender_id, message)
 
-            # Update rate limit timestamp - this starts the 15-minute cooldown
-            # update_last_message_time()
             print(f"🔒 Rate limit activated. No messages will be processed for {COOLDOWN_MINUTES} minutes.")
 
             lead = create_lead(sender_id, os.getenv("BOT_ID", "unknown"), sender_name, username)
             print(f"Lead created: {lead}")
             create_message(lead.id, 'bot', message)
-
-            # Save to log
-            with open(log_file, "a", encoding="utf-8") as log:
-                log.write(
-                    f"[{datetime.datetime.now()}] Sent message to {sender_name} (ID: {sender_id}) [username: {username}]\n")
 
             # Send webhook
             await send_webhook(username)
@@ -153,7 +140,68 @@ async def handler(event):
             print(f"❌ Failed to message {sender_name}: {e}")
 
 
-with client:
-    print("Bot is running and monitoring the group...")
-    print(f"Rate limiting: {COOLDOWN_MINUTES} minute cooldown after each message sent")
-    client.run_until_disconnected()
+# === CLEANUP ON SHUTDOWN ===
+async def cleanup():
+    """Clean up pending timers on shutdown"""
+    print("🧹 Cleaning up pending message timers...")
+    for chat_id, timer in message_debouncer.timers.items():
+        if not timer.done():
+            timer.cancel()
+    print("✅ Cleanup completed")
+
+
+# === MANUAL PROCESSING COMMANDS ===
+async def force_process_pending(chat_id: str):
+    """Manually trigger processing of pending messages for a specific chat"""
+    if chat_id in message_debouncer.timers:
+        message_debouncer.timers[chat_id].cancel()
+    await message_debouncer._process_pending_messages(chat_id)
+
+
+async def get_pending_stats():
+    """Get statistics about pending messages"""
+    total_pending = sum(len(messages) for messages in message_debouncer.pending_messages.values())
+    active_chats = len(message_debouncer.pending_messages)
+    active_timers = len(message_debouncer.timers)
+
+    print(f"📊 Pending Messages Stats:")
+    print(f"   - Total pending messages: {total_pending}")
+    print(f"   - Active chats with pending messages: {active_chats}")
+    print(f"   - Active timers: {active_timers}")
+
+    for chat_id, messages in message_debouncer.pending_messages.items():
+        if messages:
+            print(f"   - Chat {chat_id}: {len(messages)} pending messages")
+
+
+# === ENHANCED SYSTEM PROMPT ===
+# Update the system prompt in your conversation.py to handle multiple messages:
+ENHANCED_SYSTEM_PROMPT_ADDITION = """
+IMPORTANT: Users may send multiple messages in quick succession. When you receive an input that contains multiple timestamped messages like:
+
+"User sent 3 messages:
+[14:23:15] Hello
+[14:23:18] Are you there?
+[14:23:20] I'm interested in your services"
+
+Respond to the complete context of all messages as one coherent conversation. Don't acknowledge that there were multiple messages unless relevant. Just respond naturally to the overall intent and content.
+"""
+
+if __name__ == "__main__":
+    try:
+        with client:
+            print("🤖 Bot is running and monitoring the group...")
+            print(f"⏰ Rate limiting: {COOLDOWN_MINUTES} minute cooldown after each message sent")
+            print(f"🕒 Message debouncing: {DEBOUNCE_SECONDS} seconds wait after last message")
+            print("\nDebouncing behavior:")
+            print("  - Multiple rapid messages are collected")
+            print(f"  - Bot waits {DEBOUNCE_SECONDS} seconds after the last message")
+            print("  - Responds once to all collected messages")
+            print("\nPress Ctrl+C to stop...")
+            client.run_until_disconnected()
+    except KeyboardInterrupt:
+        print("\n🛑 Shutting down...")
+        asyncio.run(cleanup())
+    except Exception as e:
+        print(f"❌ Bot crashed: {e}")
+        asyncio.run(cleanup())

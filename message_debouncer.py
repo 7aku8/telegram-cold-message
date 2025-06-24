@@ -85,7 +85,7 @@ class MessageDebouncer:
                 timestamp_str = msg.timestamp.strftime("%H:%M:%S")
                 message_parts.append(f"[{timestamp_str}] {msg.content}")
 
-            combined_message = f"User sent {len(messages)} messages:\n" + "\n".join(message_parts)
+            combined_message = "\n".join(message_parts)
 
         # Use the latest message's sender info
         latest_msg = messages[-1]
