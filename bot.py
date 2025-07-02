@@ -4,21 +4,22 @@ import random
 
 from telethon import TelegramClient, events
 import openai
-import datetime
 from dotenv import load_dotenv
 
-from conversation import create_bot
-from database import get_lead, create_lead, create_message
-from ai_utils import is_lead_relevant, generate_first_message
-from message_debouncer import MessageDebouncer
-from webhook import send_webhook
+from utils.conversation import create_bot
+from utils.database import get_lead, create_lead, create_message
+from utils.ai_utils import is_lead_relevant, generate_first_message
+from utils.message_debouncer import MessageDebouncer
+from utils.only_leads import run_only_for_leads
+from utils.webhook import send_webhook
+from utils.working_hours import run_only_in_working_hours
 
 load_dotenv()
 
 # === CONFIGURATION ===
 api_id = int(os.getenv("API_ID", 1))
 api_hash = os.getenv("API_HASH", "your_api_hash_here")
-session_name = 'filip_session'
+session_name = 'sessions/bot'
 
 chat_ids = [
     -4876574630,  # P100 - Crypto Business Accounts
@@ -64,16 +65,13 @@ bot = create_bot({
 message_debouncer.set_bot_and_client(bot, client)
 
 
-@client.on(events.NewMessage())
+@run_only_in_working_hours
+# @client.on(events.NewMessage())
+@client.on(events.NewMessage(incoming=True))
+@run_only_for_leads
 async def on_new_message(event):
     """Handle incoming messages from existing leads with debouncing"""
     chat_id = str(event.chat_id)
-
-    is_lead = get_lead(int(chat_id))
-
-    if not is_lead:
-        print(f"New chat started with {chat_id}, but no lead found. Skipping...")
-        return
 
     sender = await event.get_sender()
     sender_name = sender.first_name or "there"
@@ -91,6 +89,7 @@ async def on_new_message(event):
 
 
 # === MAIN EVENT HANDLER ===
+@run_only_in_working_hours
 @client.on(events.NewMessage(chat_ids))
 async def handler(event):
     """Handle new messages from monitored groups"""
@@ -148,14 +147,6 @@ async def cleanup():
         if not timer.done():
             timer.cancel()
     print("✅ Cleanup completed")
-
-
-# === MANUAL PROCESSING COMMANDS ===
-async def force_process_pending(chat_id: str):
-    """Manually trigger processing of pending messages for a specific chat"""
-    if chat_id in message_debouncer.timers:
-        message_debouncer.timers[chat_id].cancel()
-    await message_debouncer._process_pending_messages(chat_id)
 
 
 async def get_pending_stats():

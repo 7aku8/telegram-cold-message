@@ -6,7 +6,6 @@ from sqlalchemy import engine_from_config
 from sqlalchemy import pool
 
 from sqlmodel import SQLModel
-from models import Lead, Message
 
 from alembic import context
 load_dotenv()

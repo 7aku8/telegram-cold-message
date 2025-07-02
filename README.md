@@ -161,8 +161,6 @@ After installation, your bot files will be organized as:
 ├── bot.py                 # Main bot script
 ├── .env                   # Environment variables
 ├── venv/                  # Python virtual environment
-├── messaged_users.db      # SQLite database
-├── sent_messages_log.txt  # Message log
 └── requirements.txt       # Python dependencies
 
 /etc/systemd/system/
@@ -194,11 +192,6 @@ sudo chmod 600 /opt/telegram-bot/.env
 
 **Database issues:**
 ```bash
-# Check database permissions
-sudo ls -la /opt/telegram-bot/messaged_users.db
-
-# Reset database (if needed)
-sudo rm /opt/telegram-bot/messaged_users.db
 sudo systemctl restart telegram-bot
 ```
 
@@ -206,7 +199,6 @@ sudo systemctl restart telegram-bot
 
 - **Service logs:** `sudo journalctl -u telegram-bot`
 - **Application logs:** `/var/log/telegram-bot/`
-- **Message history:** `/opt/telegram-bot/sent_messages_log.txt`
 
 ## 🔒 Security Features
 

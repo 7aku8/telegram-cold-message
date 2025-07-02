@@ -3,7 +3,7 @@ import os
 from dotenv import load_dotenv
 from sqlalchemy import create_engine
 from sqlmodel import select, Session, SQLModel
-from models import Lead, Message
+from utils.models import Lead, Message
 
 load_dotenv()
 
